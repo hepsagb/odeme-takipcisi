@@ -20,35 +20,46 @@ import {
   TrendingDown,
   Save,
   Landmark,
-  Repeat,
-  CalendarClock,
   Handshake,
   ListFilter,
-  ArrowRight,
-  Download,
-  PieChart,
   BarChart2,
   Tag,
   Smartphone,
   Share,
   MoreVertical,
-  Menu
+  Settings,
+  ShieldCheck,
+  Lock,
+  LogOut,
+  FileDown
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { Payment, FilterType, PaymentCategory, PAYMENT_TYPES, PaymentPeriod } from './types';
+import { Payment, PaymentCategory, PAYMENT_TYPES, PaymentPeriod } from './types';
 import { ImportExcel } from './components/ImportExcel';
 import { analyzePayments } from './services/geminiService';
 import { requestNotificationPermission, sendNotification } from './utils/notifications';
 import confetti from 'canvas-confetti';
 
 const STORAGE_KEY = 'odeme_takipcisi_data';
+const PIN_KEY = 'odeme_takipcisi_pin';
 
 const App: React.FC = () => {
+  // --- Data State ---
   const [payments, setPayments] = useState<Payment[]>([]);
+  const [currentTime, setCurrentTime] = useState(new Date());
+
+  // --- Auth / Security State ---
+  const [isLocked, setIsLocked] = useState(true); // Default locked until checked
+  const [pinInput, setPinInput] = useState('');
+  const [setupPinMode, setSetupPinMode] = useState<'NONE' | 'CREATE' | 'CONFIRM'>('NONE');
+  const [tempPin, setTempPin] = useState('');
+  const [hasPin, setHasPin] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+  
+  // --- UI State ---
   const [showImportModal, setShowImportModal] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<string>('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [currentTime, setCurrentTime] = useState(new Date());
   
   // PWA Install State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
@@ -83,43 +94,124 @@ const App: React.FC = () => {
     type: null
   });
 
-  // Load data & Init PWA
+  // --- INITIALIZATION ---
+
   useEffect(() => {
+    // 1. Load Data
     const savedData = localStorage.getItem(STORAGE_KEY);
     if (savedData) {
       setPayments(JSON.parse(savedData));
     }
     requestNotificationPermission();
 
-    // Check if running in standalone mode (already installed)
+    // 2. Check PIN
+    const savedPin = localStorage.getItem(PIN_KEY);
+    if (savedPin) {
+      setHasPin(true);
+      setIsLocked(true); // Lock if PIN exists
+    } else {
+      setHasPin(false);
+      setIsLocked(false); // Unlock if no PIN
+    }
+
+    // 3. PWA Checks
     const isInStandaloneMode = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
     setIsStandalone(isInStandaloneMode);
 
-    // Detect iOS
     const userAgent = window.navigator.userAgent.toLowerCase();
     setIsIOS(/iphone|ipad|ipod/.test(userAgent));
 
-    // Capture the install prompt event
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
     });
   }, []);
 
-  // Save data
+  // Save data on change
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payments));
   }, [payments]);
 
-  // Timer
+  // Timer for Notifications
   useEffect(() => {
     const timer = setInterval(() => {
       const now = new Date();
       setCurrentTime(now);
       checkNotifications(now);
-    }, 60000); // Check every minute
+    }, 60000);
     return () => clearInterval(timer);
   }, [payments]);
+
+  // --- AUTH LOGIC ---
+
+  const handlePinEntry = (num: string) => {
+    if (pinInput.length < 4) {
+      const newPin = pinInput + num;
+      setPinInput(newPin);
+      
+      // Auto submit on 4th digit
+      if (newPin.length === 4) {
+        if (setupPinMode === 'NONE') {
+          // Unlock Mode
+          const savedPin = localStorage.getItem(PIN_KEY);
+          if (newPin === savedPin) {
+            setIsLocked(false);
+            setPinInput('');
+          } else {
+            // Shake effect logic could go here
+            setTimeout(() => setPinInput(''), 300);
+            alert("Hatalı PIN!");
+          }
+        } else if (setupPinMode === 'CREATE') {
+          // Creating PIN step 1
+          setTempPin(newPin);
+          setSetupPinMode('CONFIRM');
+          setPinInput('');
+        } else if (setupPinMode === 'CONFIRM') {
+          // Creating PIN step 2
+          if (newPin === tempPin) {
+            localStorage.setItem(PIN_KEY, newPin);
+            setHasPin(true);
+            setSetupPinMode('NONE');
+            setIsLocked(false);
+            setPinInput('');
+            alert("PIN Kodu başarıyla oluşturuldu!");
+          } else {
+            alert("PIN kodları eşleşmedi. Tekrar deneyin.");
+            setSetupPinMode('CREATE');
+            setPinInput('');
+            setTempPin('');
+          }
+        }
+      }
+    }
+  };
+
+  const handleBackspace = () => {
+    setPinInput(prev => prev.slice(0, -1));
+  };
+
+  const removePin = () => {
+    if (window.confirm("PIN korumasını kaldırmak istediğinize emin misiniz?")) {
+      localStorage.removeItem(PIN_KEY);
+      setHasPin(false);
+      setIsLocked(false);
+    }
+  };
+
+  const handleLogout = () => {
+    setIsLocked(true);
+    setPinInput('');
+    setShowSettings(false);
+  };
+
+  const clearAllData = () => {
+    if (window.confirm("TÜM VERİLER SİLİNECEK! Bu işlem geri alınamaz. Emin misiniz?")) {
+       setPayments([]);
+       localStorage.removeItem(STORAGE_KEY);
+       alert("Veriler sıfırlandı.");
+    }
+  };
 
   // --- Date Helpers ---
 
@@ -168,6 +260,7 @@ const App: React.FC = () => {
   const handleImport = (importedPayments: Payment[]) => {
     setPayments(prev => [...prev, ...importedPayments]);
     setShowImportModal(false);
+    setShowSettings(false); // Close settings if opened from there
   };
 
   const handleExport = () => {
@@ -195,7 +288,6 @@ const App: React.FC = () => {
   };
 
   const handleInstallClick = () => {
-    // If we have captured the event (Android mainly)
     if (deferredPrompt) {
       deferredPrompt.prompt();
       deferredPrompt.userChoice.then((choiceResult: any) => {
@@ -204,7 +296,6 @@ const App: React.FC = () => {
         }
       });
     } else {
-      // If no event (iOS or Android manual fallback), show instructions
       setShowInstallHelp(true);
     }
   };
@@ -247,7 +338,6 @@ const App: React.FC = () => {
     const isPastEntry = entryModal.isPastPayment;
     
     if (p.id) {
-      // Edit existing
       setPayments(prev => prev.map(item => item.id === p.id ? { ...item, ...p, category } as Payment : item));
     } else {
       const newPayment: Payment = {
@@ -256,10 +346,10 @@ const App: React.FC = () => {
         paymentType: p.paymentType!,
         category: category,
         amount: Number(p.amount),
-        paidAmount: isPastEntry ? Number(p.amount) : 0, // Mark as paid if past
+        paidAmount: isPastEntry ? Number(p.amount) : 0,
         minimumPaymentAmount: p.minimumPaymentAmount ? Number(p.minimumPaymentAmount) : undefined,
         date: p.date!,
-        isPaid: isPastEntry || false, // Mark as paid if past
+        isPaid: isPastEntry || false,
         endDate: p.endDate,
         period: p.period || 'MONTHLY',
         customTag: p.customTag,
@@ -292,17 +382,14 @@ const App: React.FC = () => {
       const currentPayment = prev.find(p => p.id === paymentModal.paymentId);
       if (!currentPayment) return prev;
 
-      // 1. Update current payment
       const updatedPayments = prev.map(p => 
         p.id === paymentModal.paymentId 
           ? { ...p, isPaid: true, paidAmount: paidVal } 
           : p
       );
 
-      // 2. Logic for generating Next Payment (Recurring)
       const isFixedTermLoan = currentPayment.category === 'LOAN'; 
       
-      // Kredi değilse otomatik oluştur
       if (!isFixedTermLoan) {
         const pDate = new Date(currentPayment.date);
         const nextDate = new Date(pDate);
@@ -325,7 +412,6 @@ const App: React.FC = () => {
         
         const nextDateStr = nextDate.toISOString().split('T')[0];
 
-        // Kart/Fatura için bitiş tarihi varsa kontrol et
         let shouldGenerate = true;
         if (currentPayment.endDate && nextDate > new Date(currentPayment.endDate)) {
           shouldGenerate = false;
@@ -338,8 +424,7 @@ const App: React.FC = () => {
             date: nextDateStr,
             isPaid: false,
             paidAmount: 0,
-            amount: currentPayment.amount, // Kartlar için sonraki ay tutarı manuel güncellenmeli
-            // Carry over settings
+            amount: currentPayment.amount,
             period: currentPayment.period,
             customTag: currentPayment.customTag,
             autoPayment: currentPayment.autoPayment,
@@ -405,13 +490,11 @@ const App: React.FC = () => {
   const tabTotalAmount = filteredList.reduce((sum, p) => sum + p.amount, 0);
   const tabPaidAmount = filteredList.reduce((sum, p) => sum + (p.paidAmount || 0), 0);
   const globalTotalAmount = allMonthPayments.reduce((sum, p) => sum + p.amount, 0);
-  const globalPaidAmount = allMonthPayments.reduce((sum, p) => sum + (p.paidAmount || 0), 0);
   const monthName = selectedDate.toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' });
 
-  // --- Dashboard Logic ---
+  // --- Dashboard Stats ---
   const getDashboardStats = () => {
     const now = new Date();
-    // 1. Last 6 Months Spending Trend
     const trendData = [];
     for (let i = 5; i >= 0; i--) {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
@@ -431,13 +514,11 @@ const App: React.FC = () => {
       });
     }
 
-    // 2. Category Breakdown (This Month)
     const breakdown = { LOAN: 0, CARD: 0, DIGITAL: 0, BILL: 0 };
     allMonthPayments.forEach(p => {
       breakdown[p.category] += p.amount;
     });
 
-    // 3. Custom Tag Breakdown (This Month)
     const tagBreakdown: Record<string, number> = {};
     allMonthPayments.forEach(p => {
       if (p.customTag) {
@@ -450,12 +531,10 @@ const App: React.FC = () => {
 
   const dashboardStats = getDashboardStats();
 
-  // --- Date Change Check for Manual Entry ---
   const handleDateChangeInModal = (dateStr: string) => {
     const selected = new Date(dateStr);
     const today = new Date();
     today.setHours(0,0,0,0);
-    // If selected date is yesterday or before
     const isPast = selected < today;
     
     setEntryModal(prev => ({ 
@@ -464,6 +543,74 @@ const App: React.FC = () => {
       isPastPayment: isPast
     }));
   };
+
+  // --- RENDER LOCK SCREEN ---
+  
+  if (isLocked) {
+    return (
+      <div className="min-h-screen bg-blue-600 flex items-center justify-center p-4">
+        <div className="bg-white rounded-3xl p-8 w-full max-w-sm shadow-2xl text-center">
+           <div className="mb-6 flex justify-center">
+             <div className="bg-blue-100 p-4 rounded-full">
+               <Lock className="w-10 h-10 text-blue-600" />
+             </div>
+           </div>
+           
+           <h2 className="text-2xl font-bold text-gray-800 mb-2">
+             {setupPinMode === 'CREATE' ? 'Yeni PIN Oluştur' : 
+              setupPinMode === 'CONFIRM' ? 'PIN\'i Doğrula' : 
+              'Hoşgeldiniz'}
+           </h2>
+           <p className="text-gray-500 mb-6 text-sm">
+             {setupPinMode === 'NONE' ? 'Devam etmek için 4 haneli PIN kodunuzu girin.' : 
+              'Verilerinizi korumak için bir şifre belirleyin.'}
+           </p>
+
+           <div className="flex justify-center gap-4 mb-8">
+             {[0, 1, 2, 3].map(i => (
+               <div key={i} className={`w-4 h-4 rounded-full border-2 transition-all ${
+                 pinInput.length > i ? 'bg-blue-600 border-blue-600' : 'bg-transparent border-gray-300'
+               }`} />
+             ))}
+           </div>
+
+           <div className="grid grid-cols-3 gap-4 mb-4">
+             {[1,2,3,4,5,6,7,8,9].map(num => (
+               <button 
+                 key={num} 
+                 onClick={() => handlePinEntry(num.toString())}
+                 className="h-16 rounded-2xl bg-gray-50 text-2xl font-bold text-gray-700 hover:bg-gray-100 active:bg-gray-200 transition"
+               >
+                 {num}
+               </button>
+             ))}
+             <div />
+             <button 
+                onClick={() => handlePinEntry("0")}
+                className="h-16 rounded-2xl bg-gray-50 text-2xl font-bold text-gray-700 hover:bg-gray-100 active:bg-gray-200 transition"
+             >
+                0
+             </button>
+             <button 
+                onClick={handleBackspace}
+                className="h-16 rounded-2xl bg-gray-50 flex items-center justify-center text-gray-700 hover:bg-gray-100 active:bg-gray-200 transition"
+             >
+                <ChevronLeft className="w-8 h-8" />
+             </button>
+           </div>
+           
+           {/* If strictly locked but no PIN set (shouldn't happen with useEffect logic but safe fallback) */}
+           {!hasPin && setupPinMode === 'NONE' && (
+              <button onClick={() => setSetupPinMode('CREATE')} className="text-blue-600 text-sm font-semibold mt-4">
+                PIN Oluştur
+              </button>
+           )}
+        </div>
+      </div>
+    );
+  }
+
+  // --- RENDER APP ---
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col max-w-lg mx-auto border-x border-gray-200 shadow-xl relative pb-24">
@@ -488,6 +635,9 @@ const App: React.FC = () => {
               )}
               <button onClick={() => requestNotificationPermission()} className="p-2 bg-blue-500 rounded-full hover:bg-blue-400">
                 <Bell className="w-5 h-5" />
+              </button>
+              <button onClick={() => setShowSettings(true)} className="p-2 bg-blue-700 rounded-full hover:bg-blue-500">
+                <Settings className="w-5 h-5" />
               </button>
             </div>
           </div>
@@ -570,28 +720,14 @@ const App: React.FC = () => {
             })}
           </div>
 
-          {/* Action Buttons */}
-          <div className="px-6 mt-4 flex gap-3">
+          {/* Action Buttons Row */}
+          <div className="px-6 mt-4">
             <button 
               onClick={handleAIAnalysis}
-              className="flex-1 bg-gradient-to-r from-purple-500 to-indigo-600 text-white p-3 rounded-xl shadow-md flex items-center justify-center gap-2 hover:opacity-90 transition active:scale-95"
+              className="w-full bg-gradient-to-r from-purple-500 to-indigo-600 text-white p-3 rounded-xl shadow-md flex items-center justify-center gap-2 hover:opacity-90 transition active:scale-95"
             >
               {isAnalyzing ? <RefreshCw className="w-4 h-4 animate-spin" /> : <BrainCircuit className="w-4 h-4" />}
               <span className="text-xs font-semibold">Mali Analiz</span>
-            </button>
-            <button 
-              onClick={handleExport}
-              className="bg-white text-gray-600 border border-gray-200 p-3 rounded-xl shadow-sm hover:bg-gray-50 flex items-center justify-center gap-2 flex-1"
-            >
-              <Download className="w-4 h-4" />
-              <span className="text-xs font-medium">Yedekle</span>
-            </button>
-            <button 
-              onClick={() => setShowImportModal(true)}
-              className="bg-white text-gray-600 border border-gray-200 p-3 rounded-xl shadow-sm hover:bg-gray-50 flex items-center justify-center gap-2 flex-1"
-            >
-              <Upload className="w-4 h-4" />
-              <span className="text-xs font-medium">Yükle</span>
             </button>
           </div>
 
@@ -662,15 +798,11 @@ const App: React.FC = () => {
                           </h3>
                           <div className="flex flex-wrap items-center gap-2 mt-1">
                             <span className="text-xs text-gray-500">{payment.paymentType}</span>
-                            
-                            {/* Custom Tag Badge */}
                             {payment.customTag && (
                                <span className="text-[10px] px-1.5 py-0.5 rounded bg-pink-50 text-pink-600 border border-pink-100 flex items-center gap-0.5">
                                  <Tag className="w-2.5 h-2.5" /> {payment.customTag}
                                </span>
                             )}
-
-                            {/* Period Badge */}
                             {(payment.category === 'DIGITAL' || payment.category === 'BILL') && (
                               <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
                                 payment.period === 'ANNUAL' 
@@ -793,7 +925,7 @@ const App: React.FC = () => {
           {/* Category Breakdown */}
           <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100 mb-4">
              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-               <PieChart className="w-5 h-5 text-orange-500" /> Bu Ayın Dağılımı
+               <ListFilter className="w-5 h-5 text-orange-500" /> Bu Ayın Dağılımı
              </h3>
              <div className="space-y-4">
                 {[
@@ -855,6 +987,67 @@ const App: React.FC = () => {
         <Plus className="w-6 h-6" />
       </button>
 
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                <Settings className="w-6 h-6 text-gray-600" /> Ayarlar
+              </h3>
+              <button onClick={() => setShowSettings(false)} className="text-gray-400 hover:text-gray-600">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            <div className="space-y-4">
+               {/* Security Section */}
+               <div className="bg-gray-50 rounded-xl p-4">
+                 <h4 className="text-sm font-bold text-gray-500 uppercase mb-3 flex items-center gap-1">
+                   <ShieldCheck className="w-4 h-4" /> Güvenlik
+                 </h4>
+                 {hasPin ? (
+                   <div className="space-y-2">
+                     <button onClick={removePin} className="w-full text-left p-3 bg-white rounded-lg border border-gray-200 text-red-600 text-sm font-medium hover:bg-red-50">
+                       PIN Korumasını Kaldır
+                     </button>
+                     <button onClick={handleLogout} className="w-full text-left p-3 bg-white rounded-lg border border-gray-200 text-gray-700 text-sm font-medium hover:bg-gray-100 flex items-center justify-between">
+                       Ekranı Kilitle <LogOut className="w-4 h-4"/>
+                     </button>
+                   </div>
+                 ) : (
+                   <button onClick={() => { setSetupPinMode('CREATE'); setIsLocked(true); setShowSettings(false); }} className="w-full text-left p-3 bg-white rounded-lg border border-gray-200 text-blue-600 text-sm font-medium hover:bg-blue-50">
+                     PIN Kodu Oluştur
+                   </button>
+                 )}
+               </div>
+
+               {/* Data Section */}
+               <div className="bg-gray-50 rounded-xl p-4">
+                 <h4 className="text-sm font-bold text-gray-500 uppercase mb-3 flex items-center gap-1">
+                   <Save className="w-4 h-4" /> Veri Yönetimi
+                 </h4>
+                 <div className="grid grid-cols-2 gap-2">
+                   <button onClick={handleExport} className="p-3 bg-white rounded-lg border border-gray-200 text-gray-700 text-sm font-medium hover:bg-gray-100 flex flex-col items-center gap-1">
+                     <FileDown className="w-5 h-5 text-gray-500" /> Yedekle
+                   </button>
+                   <button onClick={() => setShowImportModal(true)} className="p-3 bg-white rounded-lg border border-gray-200 text-gray-700 text-sm font-medium hover:bg-gray-100 flex flex-col items-center gap-1">
+                     <Upload className="w-5 h-5 text-gray-500" /> Yükle
+                   </button>
+                 </div>
+                 <button onClick={clearAllData} className="w-full mt-3 text-left p-3 bg-white rounded-lg border border-red-100 text-red-500 text-xs hover:bg-red-50">
+                   Tüm Verileri Sıfırla (Dikkat!)
+                 </button>
+               </div>
+            </div>
+            
+            <div className="mt-6 text-center text-xs text-gray-400">
+              v1.2 • Gemini AI Powered
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Payment Confirmation Modal */}
       {paymentModal.isOpen && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
@@ -912,7 +1105,7 @@ const App: React.FC = () => {
         </div>
       )}
 
-      {/* Install Help Modal (Manual Instructions) */}
+      {/* Install Help Modal */}
       {showInstallHelp && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
           <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm relative">
@@ -1026,7 +1219,6 @@ const App: React.FC = () => {
                  )}
               </div>
 
-              {/* Custom Tag & Frequency */}
               <div className="grid grid-cols-2 gap-3">
                  <div>
                     <label className="block text-xs font-semibold text-gray-500 mb-1">Etiket (Grup)</label>
@@ -1038,7 +1230,6 @@ const App: React.FC = () => {
                       className="w-full border border-gray-300 rounded-lg p-2 text-sm"
                     />
                  </div>
-                 {/* Only show frequency for non-loan items or update logic if loans support custom freq (usually loans are monthly) */}
                  {entryModal.payment.paymentType !== 'Kredi' && (
                     <div>
                       <label className="block text-xs font-semibold text-gray-500 mb-1">Sıklık</label>
@@ -1056,7 +1247,6 @@ const App: React.FC = () => {
                  )}
               </div>
 
-              {/* ... Specific Fields (Bill/Loan/Card) ... */}
               {determineCategory(entryModal.payment.paymentType || '') === 'BILL' && (
                 <div className="space-y-3">
                    <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100">
