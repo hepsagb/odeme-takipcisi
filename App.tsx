@@ -29,7 +29,10 @@ import {
   PieChart,
   BarChart2,
   Tag,
-  Smartphone
+  Smartphone,
+  Share,
+  MoreVertical,
+  Menu
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Payment, FilterType, PaymentCategory, PAYMENT_TYPES, PaymentPeriod } from './types';
@@ -47,9 +50,11 @@ const App: React.FC = () => {
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   
-  // PWA Install Prompt State
+  // PWA Install State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
-  const [showInstallButton, setShowInstallButton] = useState(false);
+  const [isStandalone, setIsStandalone] = useState(false);
+  const [showInstallHelp, setShowInstallHelp] = useState(false);
+  const [isIOS, setIsIOS] = useState(false);
   
   // View Modes: LIST | DASHBOARD
   const [viewMode, setViewMode] = useState<'LIST' | 'DASHBOARD'>('LIST');
@@ -78,7 +83,7 @@ const App: React.FC = () => {
     type: null
   });
 
-  // Load data
+  // Load data & Init PWA
   useEffect(() => {
     const savedData = localStorage.getItem(STORAGE_KEY);
     if (savedData) {
@@ -86,11 +91,18 @@ const App: React.FC = () => {
     }
     requestNotificationPermission();
 
-    // PWA Install Event Listener
+    // Check if running in standalone mode (already installed)
+    const isInStandaloneMode = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
+    setIsStandalone(isInStandaloneMode);
+
+    // Detect iOS
+    const userAgent = window.navigator.userAgent.toLowerCase();
+    setIsIOS(/iphone|ipad|ipod/.test(userAgent));
+
+    // Capture the install prompt event
     window.addEventListener('beforeinstallprompt', (e) => {
       e.preventDefault();
       setDeferredPrompt(e);
-      setShowInstallButton(true);
     });
   }, []);
 
@@ -183,14 +195,18 @@ const App: React.FC = () => {
   };
 
   const handleInstallClick = () => {
-    if (!deferredPrompt) return;
-    deferredPrompt.prompt();
-    deferredPrompt.userChoice.then((choiceResult: any) => {
-      if (choiceResult.outcome === 'accepted') {
-        setShowInstallButton(false);
-      }
-      setDeferredPrompt(null);
-    });
+    // If we have captured the event (Android mainly)
+    if (deferredPrompt) {
+      deferredPrompt.prompt();
+      deferredPrompt.userChoice.then((choiceResult: any) => {
+        if (choiceResult.outcome === 'accepted') {
+          setDeferredPrompt(null);
+        }
+      });
+    } else {
+      // If no event (iOS or Android manual fallback), show instructions
+      setShowInstallHelp(true);
+    }
   };
 
   // --- Logic Helpers ---
@@ -461,7 +477,7 @@ const App: React.FC = () => {
               <p className="text-blue-100 text-sm opacity-90">{currentTime.toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
             </div>
             <div className="flex gap-2">
-              {showInstallButton && (
+              {!isStandalone && (
                 <button 
                   onClick={handleInstallClick}
                   className="p-2 bg-green-500 rounded-full hover:bg-green-400 animate-pulse shadow-lg"
@@ -892,6 +908,59 @@ const App: React.FC = () => {
                   </div>
               ))}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Install Help Modal (Manual Instructions) */}
+      {showInstallHelp && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm relative">
+            <button 
+              onClick={() => setShowInstallHelp(false)}
+              className="absolute top-3 right-3 text-gray-400 hover:text-gray-600"
+            >
+              <X className="w-6 h-6" />
+            </button>
+            
+            <h3 className="text-xl font-bold text-gray-800 mb-4 text-center">Uygulamayı Yükle</h3>
+            
+            <div className="bg-blue-50 p-4 rounded-xl mb-6">
+              <p className="text-sm text-blue-800 text-center font-medium">
+                Bu uygulamayı telefonuna yükleyerek internetsiz erişebilir ve tam ekran kullanabilirsin.
+              </p>
+            </div>
+
+            {isIOS ? (
+              <div className="space-y-4">
+                 <div className="flex items-center gap-4">
+                    <div className="bg-gray-100 p-2 rounded-lg"><Share className="w-6 h-6 text-blue-600" /></div>
+                    <p className="text-sm text-gray-600">1. Tarayıcının altındaki <strong>Paylaş</strong> butonuna bas.</p>
+                 </div>
+                 <div className="flex items-center gap-4">
+                    <div className="bg-gray-100 p-2 rounded-lg"><Plus className="w-6 h-6 text-gray-700" /></div>
+                    <p className="text-sm text-gray-600">2. Menüden <strong>"Ana Ekrana Ekle"</strong> seçeneğini bul ve bas.</p>
+                 </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                 <div className="flex items-center gap-4">
+                    <div className="bg-gray-100 p-2 rounded-lg"><MoreVertical className="w-6 h-6 text-gray-700" /></div>
+                    <p className="text-sm text-gray-600">1. Tarayıcının sağ üst köşesindeki <strong>3 Nokta</strong> menüsüne bas.</p>
+                 </div>
+                 <div className="flex items-center gap-4">
+                    <div className="bg-gray-100 p-2 rounded-lg"><Smartphone className="w-6 h-6 text-blue-600" /></div>
+                    <p className="text-sm text-gray-600">2. <strong>"Uygulamayı Yükle"</strong> veya <strong>"Ana Ekrana Ekle"</strong> seçeneğine bas.</p>
+                 </div>
+              </div>
+            )}
+            
+            <button 
+              onClick={() => setShowInstallHelp(false)}
+              className="w-full mt-6 bg-blue-600 text-white py-3 rounded-xl font-bold hover:bg-blue-700 transition"
+            >
+              Tamam, Anladım
+            </button>
           </div>
         </div>
       )}
