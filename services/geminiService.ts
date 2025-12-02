@@ -1,9 +1,10 @@
-import { GoogleGenAI } from "@google/genai";
-import { Payment } from "../types";
+
+import { GoogleGenAI, Type } from "@google/genai";
+import { Payment, AiAnalysisData } from "../types";
 
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
-export const analyzePayments = async (payments: Payment[]): Promise<string> => {
+export const analyzePayments = async (payments: Payment[]): Promise<AiAnalysisData | null> => {
   try {
     const today = new Date().toISOString().split('T')[0];
     const unpaidPayments = payments.filter(p => !p.isPaid);
@@ -22,25 +23,52 @@ export const analyzePayments = async (payments: Payment[]): Promise<string> => {
       
       Veri: ${dataSummary}
       
-      Lütfen bana kısa ve öz bir özet geç.
-      1. Toplam kalan borcum ne kadar?
-      2. Önümüzdeki 7 gün içinde acil ödenmesi gerekenler neler?
-      3. Finansal durumumla ilgili kısa, motive edici veya uyarıcı bir tavsiye ver.
-      
-      Yanıtı Türkçe ver ve HTML formatında değil, düz metin (markdown) olarak ver.
+      Lütfen finansal durumumu analiz et ve JSON formatında yanıt ver.
+      "status" alanı için: Eğer borçlar yönetilebilir ise "GOOD", kritik ise "WARNING", çok acil ve yüksek ise "DANGER" değerini kullan.
     `;
 
     const response = await ai.models.generateContent({
       model: 'gemini-2.5-flash',
       contents: prompt,
       config: {
-        thinkingConfig: { thinkingBudget: 0 } // Speed over deep reasoning
+        thinkingConfig: { thinkingBudget: 0 },
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            totalDebt: { 
+              type: Type.NUMBER, 
+              description: "Toplam ödenmemiş borç miktarı" 
+            },
+            urgentItems: { 
+              type: Type.ARRAY, 
+              items: { type: Type.STRING }, 
+              description: "Önümüzdeki 7 gün içinde ödenmesi gereken ödemelerin isimleri" 
+            },
+            summary: { 
+              type: Type.STRING, 
+              description: "Finansal durum hakkında 1-2 cümlelik kısa özet" 
+            },
+            advice: { 
+              type: Type.STRING, 
+              description: "Kısa, motive edici veya uyarıcı bir finansal tavsiye" 
+            },
+            status: { 
+              type: Type.STRING, 
+              description: "Finansal sağlık durumu: GOOD, WARNING veya DANGER" 
+            }
+          },
+          required: ["totalDebt", "urgentItems", "summary", "advice", "status"]
+        }
       }
     });
 
-    return response.text || "Analiz yapılamadı.";
+    if (response.text) {
+      return JSON.parse(response.text) as AiAnalysisData;
+    }
+    return null;
   } catch (error) {
     console.error("Gemini AI Error:", error);
-    return "AI servisine şu an erişilemiyor. Lütfen API anahtarınızı kontrol edin.";
+    return null;
   }
 };

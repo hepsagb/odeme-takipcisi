@@ -49,3 +49,17 @@ export enum FilterType {
   PENDING = 'PENDING',
   PAID = 'PAID',
 }
+
+export interface AiAnalysisData {
+  totalDebt: number;
+  urgentItems: string[];
+  summary: string;
+  advice: string;
+  status: 'GOOD' | 'WARNING' | 'DANGER';
+}
+
+export interface CloudConfig {
+  apiKey: string;
+  binId: string;
+  lastSyncedAt?: string;
+}

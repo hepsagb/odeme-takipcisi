@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, 
   CreditCard, 
@@ -31,17 +31,27 @@ import {
   ShieldCheck,
   Lock,
   LogOut,
-  FileDown
+  FileDown,
+  AlertTriangle,
+  Wallet,
+  CheckCheck,
+  Lightbulb,
+  Cloud,
+  CloudLightning,
+  Link as LinkIcon,
+  Copy
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
-import { Payment, PaymentCategory, PAYMENT_TYPES, PaymentPeriod } from './types';
+import { Payment, PaymentCategory, PAYMENT_TYPES, PaymentPeriod, AiAnalysisData, CloudConfig } from './types';
 import { ImportExcel } from './components/ImportExcel';
 import { analyzePayments } from './services/geminiService';
+import { createCloudBin, fetchCloudData, updateCloudData } from './services/cloudService';
 import { requestNotificationPermission, sendNotification } from './utils/notifications';
 import confetti from 'canvas-confetti';
 
 const STORAGE_KEY = 'odeme_takipcisi_data';
 const PIN_KEY = 'odeme_takipcisi_pin';
+const CLOUD_CONFIG_KEY = 'odeme_takipcisi_cloud_config';
 
 const App: React.FC = () => {
   // --- Data State ---
@@ -56,9 +66,18 @@ const App: React.FC = () => {
   const [hasPin, setHasPin] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   
+  // --- Cloud Sync State ---
+  const [cloudConfig, setCloudConfig] = useState<CloudConfig | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [cloudInputApiKey, setCloudInputApiKey] = useState('');
+  const [cloudInputBinId, setCloudInputBinId] = useState('');
+  const [showCloudSetup, setShowCloudSetup] = useState<'NONE' | 'CREATE' | 'CONNECT'>('NONE');
+  const syncTimeoutRef = useRef<any>(null);
+  const ignoreNextCloudPush = useRef(false); // Prevents sync loop (echo-push)
+
   // --- UI State ---
   const [showImportModal, setShowImportModal] = useState(false);
-  const [aiAnalysis, setAiAnalysis] = useState<string>('');
+  const [aiAnalysis, setAiAnalysis] = useState<AiAnalysisData | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   
   // PWA Install State
@@ -102,9 +121,19 @@ const App: React.FC = () => {
     if (savedData) {
       setPayments(JSON.parse(savedData));
     }
+    
+    // 2. Load Cloud Config
+    const savedCloud = localStorage.getItem(CLOUD_CONFIG_KEY);
+    if (savedCloud) {
+      const config = JSON.parse(savedCloud);
+      setCloudConfig(config);
+      // Auto-fetch latest data from cloud on app start
+      handleCloudPull(config); 
+    }
+
     requestNotificationPermission();
 
-    // 2. Check PIN
+    // 3. Check PIN
     const savedPin = localStorage.getItem(PIN_KEY);
     if (savedPin) {
       setHasPin(true);
@@ -114,7 +143,7 @@ const App: React.FC = () => {
       setIsLocked(false); // Unlock if no PIN
     }
 
-    // 3. PWA Checks
+    // 4. PWA Checks
     const isInStandaloneMode = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
     setIsStandalone(isInStandaloneMode);
 
@@ -127,10 +156,25 @@ const App: React.FC = () => {
     });
   }, []);
 
-  // Save data on change
+  // Save data on change (Local + Cloud Auto Push)
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(payments));
-  }, [payments]);
+
+    // If this update came from the cloud, don't push it back!
+    if (ignoreNextCloudPush.current) {
+      ignoreNextCloudPush.current = false;
+      return;
+    }
+
+    // Cloud Auto Sync Logic (Debounced)
+    if (cloudConfig) {
+      if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
+      
+      syncTimeoutRef.current = setTimeout(() => {
+        handleCloudPush();
+      }, 2000); // Wait 2 seconds after last change before pushing
+    }
+  }, [payments, cloudConfig]);
 
   // Timer for Notifications
   useEffect(() => {
@@ -210,6 +254,86 @@ const App: React.FC = () => {
        setPayments([]);
        localStorage.removeItem(STORAGE_KEY);
        alert("Veriler sıfırlandı.");
+    }
+  };
+
+  // --- CLOUD LOGIC ---
+
+  const handleCloudSetup = async (mode: 'CREATE' | 'CONNECT') => {
+    if (!cloudInputApiKey) {
+      alert("Lütfen bir Erişim Anahtarı (API Key) girin.");
+      return;
+    }
+
+    setIsSyncing(true);
+
+    if (mode === 'CREATE') {
+      // Create new bin with current local data
+      const binId = await createCloudBin(cloudInputApiKey, payments);
+      if (binId) {
+        const newConfig = { apiKey: cloudInputApiKey, binId, lastSyncedAt: new Date().toISOString() };
+        setCloudConfig(newConfig);
+        localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(newConfig));
+        alert("Gizli Cüzdan oluşturuldu! Bu cihazdaki veriler buluta yüklendi.");
+        setShowCloudSetup('NONE');
+      } else {
+        alert("Cüzdan oluşturulamadı. API Key'in geçerli olduğundan emin olun.");
+      }
+    } else {
+      // Connect to existing bin
+      if (!cloudInputBinId) {
+        alert("Bağlanmak için Cüzdan Kimliği (ID) gereklidir.");
+        setIsSyncing(false);
+        return;
+      }
+      
+      const data = await fetchCloudData(cloudInputBinId, cloudInputApiKey);
+      if (data) {
+        ignoreNextCloudPush.current = true; // Don't push back what we just pulled
+        setPayments(data); // Replace local with cloud
+        const newConfig = { apiKey: cloudInputApiKey, binId: cloudInputBinId, lastSyncedAt: new Date().toISOString() };
+        setCloudConfig(newConfig);
+        localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(newConfig));
+        alert("Cüzdana başarıyla bağlanıldı! Veriler indirildi.");
+        setShowCloudSetup('NONE');
+      } else {
+        alert("Bağlantı başarısız. Kimlikleri kontrol edin.");
+      }
+    }
+    setIsSyncing(false);
+  };
+
+  const handleCloudPull = async (config = cloudConfig) => {
+    if (!config) return;
+    setIsSyncing(true);
+    const data = await fetchCloudData(config.binId, config.apiKey);
+    if (data) {
+      ignoreNextCloudPush.current = true; // Don't push back what we just pulled
+      setPayments(data);
+      const updatedConfig = { ...config, lastSyncedAt: new Date().toISOString() };
+      setCloudConfig(updatedConfig);
+      localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(updatedConfig));
+    }
+    setIsSyncing(false);
+  };
+
+  const handleCloudPush = async () => {
+    if (!cloudConfig) return;
+    // Silent sync indicator could go here
+    const success = await updateCloudData(cloudConfig.binId, cloudConfig.apiKey, payments);
+    if (success) {
+       const updatedConfig = { ...cloudConfig, lastSyncedAt: new Date().toISOString() };
+       setCloudConfig(updatedConfig);
+       localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(updatedConfig));
+    }
+  };
+
+  const disconnectCloud = () => {
+    if (window.confirm("Bulut bağlantısını kesmek istiyor musunuz? Verileriniz silinmez, sadece senkronizasyon durur.")) {
+      setCloudConfig(null);
+      localStorage.removeItem(CLOUD_CONFIG_KEY);
+      setCloudInputApiKey('');
+      setCloudInputBinId('');
     }
   };
 
@@ -620,10 +744,29 @@ const App: React.FC = () => {
         <div className="relative z-10">
           <div className="flex justify-between items-start mb-4">
             <div>
-              <h1 className="text-2xl font-bold">Ödeme Planlayıcı</h1>
+              <h1 className="text-2xl font-bold flex items-center gap-2">
+                Ödeme Planlayıcı
+                {cloudConfig && <CloudLightning className="w-4 h-4 text-green-300 animate-pulse" />}
+              </h1>
               <p className="text-blue-100 text-sm opacity-90">{currentTime.toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
             </div>
             <div className="flex gap-2">
+              {/* Sync Button (Visible only if configured) */}
+              {cloudConfig && (
+                <button 
+                  onClick={() => handleCloudPull(cloudConfig)}
+                  disabled={isSyncing}
+                  className="p-2 bg-indigo-500 rounded-full hover:bg-indigo-400 transition shadow-lg border border-indigo-400"
+                  title="Buluttan Çek"
+                >
+                  {isSyncing ? (
+                    <RefreshCw className="w-5 h-5 animate-spin text-white" />
+                  ) : (
+                    <CloudLightning className="w-5 h-5 text-white" />
+                  )}
+                </button>
+              )}
+
               {!isStandalone && (
                 <button 
                   onClick={handleInstallClick}
@@ -636,8 +779,9 @@ const App: React.FC = () => {
               <button onClick={() => requestNotificationPermission()} className="p-2 bg-blue-500 rounded-full hover:bg-blue-400">
                 <Bell className="w-5 h-5" />
               </button>
-              <button onClick={() => setShowSettings(true)} className="p-2 bg-blue-700 rounded-full hover:bg-blue-500">
+              <button onClick={() => setShowSettings(true)} className="p-2 bg-blue-700 rounded-full hover:bg-blue-500 relative">
                 <Settings className="w-5 h-5" />
+                {cloudConfig && <span className="absolute top-1 right-1 w-2 h-2 bg-green-400 rounded-full border border-blue-700"></span>}
               </button>
             </div>
           </div>
@@ -731,17 +875,76 @@ const App: React.FC = () => {
             </button>
           </div>
 
-          {/* AI Result Area */}
+          {/* AI Result Area - Structured */}
           {aiAnalysis && (
-            <div className="mx-6 mt-4 bg-purple-50 border border-purple-100 p-4 rounded-xl shadow-sm relative">
-              <button onClick={() => setAiAnalysis('')} className="absolute top-2 right-2 text-purple-400 hover:text-purple-600">
-                <X className="w-4 h-4" />
+            <div className={`mx-6 mt-4 border p-5 rounded-2xl shadow-lg relative overflow-hidden ${
+              aiAnalysis.status === 'DANGER' ? 'bg-red-50 border-red-200' :
+              aiAnalysis.status === 'WARNING' ? 'bg-orange-50 border-orange-200' :
+              'bg-gradient-to-br from-indigo-50 to-purple-50 border-indigo-100'
+            }`}>
+              <button onClick={() => setAiAnalysis(null)} className="absolute top-3 right-3 text-gray-400 hover:text-gray-600">
+                <X className="w-5 h-5" />
               </button>
-              <h3 className="font-bold text-purple-900 text-sm mb-1 flex items-center gap-2">
-                <BrainCircuit className="w-4 h-4" /> Gemini Tavsiyesi
-              </h3>
-              <div className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
-                {aiAnalysis}
+              
+              <div className="flex items-center gap-2 mb-4">
+                <div className={`p-2 rounded-full ${
+                   aiAnalysis.status === 'DANGER' ? 'bg-red-100 text-red-600' :
+                   aiAnalysis.status === 'WARNING' ? 'bg-orange-100 text-orange-600' :
+                   'bg-indigo-100 text-indigo-600'
+                }`}>
+                  <BrainCircuit className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-800 text-sm">Yapay Zeka Raporu</h3>
+                  <p className="text-[10px] text-gray-500">{new Date().toLocaleDateString('tr-TR')}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 mb-4">
+                 <div className="bg-white p-3 rounded-xl shadow-sm border border-gray-100">
+                    <p className="text-[10px] text-gray-500 font-bold uppercase mb-1 flex items-center gap-1">
+                      <Wallet className="w-3 h-3" /> Toplam Borç
+                    </p>
+                    <p className="text-xl font-bold text-gray-800">{aiAnalysis.totalDebt.toLocaleString('tr-TR')} ₺</p>
+                 </div>
+                 <div className="bg-white p-3 rounded-xl shadow-sm border border-gray-100">
+                    <p className="text-[10px] text-gray-500 font-bold uppercase mb-1 flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3" /> Acil Ödemeler
+                    </p>
+                    <p className="text-xl font-bold text-red-500">{aiAnalysis.urgentItems.length} Adet</p>
+                 </div>
+              </div>
+
+              {aiAnalysis.urgentItems.length > 0 && (
+                <div className="mb-4">
+                  <h4 className="text-xs font-bold text-gray-700 mb-2 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3 text-red-500" /> Acil Ödemeler (7 Gün)
+                  </h4>
+                  <ul className="space-y-1">
+                    {aiAnalysis.urgentItems.map((item, idx) => (
+                      <li key={idx} className="text-xs bg-white/60 px-2 py-1.5 rounded-lg border border-gray-100 flex items-center gap-2">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-400 flex-shrink-0"></span>
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              <div className="mb-4">
+                 <h4 className="text-xs font-bold text-gray-700 mb-2">Özet Durum</h4>
+                 <p className="text-xs text-gray-600 leading-relaxed bg-white/50 p-2 rounded-lg">
+                   {aiAnalysis.summary}
+                 </p>
+              </div>
+
+              <div className="bg-white/80 p-3 rounded-xl border border-white/50">
+                 <h4 className="text-xs font-bold text-indigo-700 mb-1 flex items-center gap-1">
+                   <Lightbulb className="w-3 h-3" /> Tavsiye
+                 </h4>
+                 <p className="text-xs text-gray-600 italic">
+                   "{aiAnalysis.advice}"
+                 </p>
               </div>
             </div>
           )}
@@ -990,7 +1193,7 @@ const App: React.FC = () => {
       {/* Settings Modal */}
       {showSettings && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center p-4 z-50 backdrop-blur-sm">
-          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm">
+          <div className="bg-white rounded-2xl shadow-2xl p-6 w-full max-w-sm max-h-[90vh] overflow-y-auto no-scrollbar">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
                 <Settings className="w-6 h-6 text-gray-600" /> Ayarlar
@@ -1001,6 +1204,104 @@ const App: React.FC = () => {
             </div>
 
             <div className="space-y-4">
+               {/* Cloud Sync Section - "Hidden Membership" */}
+               <div className="bg-indigo-50 rounded-xl p-4 border border-indigo-100">
+                 <h4 className="text-sm font-bold text-indigo-800 uppercase mb-2 flex items-center gap-1">
+                   <Cloud className="w-4 h-4" /> Gizli Cüzdan (Bulut)
+                 </h4>
+                 
+                 {cloudConfig ? (
+                   <div className="space-y-3">
+                     <div className="bg-white p-3 rounded-lg border border-indigo-100">
+                       <div className="flex items-center gap-2 mb-2">
+                         <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse"></span>
+                         <span className="text-xs font-bold text-green-600">Bağlantı Aktif</span>
+                       </div>
+                       <p className="text-[10px] text-gray-500 mb-1">Cüzdan Kimliği:</p>
+                       <div className="flex items-center gap-1 bg-gray-50 p-1.5 rounded border border-gray-200">
+                         <code className="text-xs text-gray-700 flex-1 overflow-hidden text-ellipsis">{cloudConfig.binId}</code>
+                         <button onClick={() => navigator.clipboard.writeText(cloudConfig.binId)} className="text-gray-400 hover:text-indigo-600">
+                            <Copy className="w-3 h-3" />
+                         </button>
+                       </div>
+                     </div>
+                     <button 
+                       onClick={() => handleCloudPull()} 
+                       disabled={isSyncing}
+                       className="w-full py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold hover:bg-indigo-700 flex justify-center items-center gap-2"
+                     >
+                       {isSyncing ? <RefreshCw className="w-3 h-3 animate-spin"/> : <CloudLightning className="w-3 h-3"/>}
+                       Şimdi Senkronize Et
+                     </button>
+                     <button onClick={disconnectCloud} className="w-full text-center text-xs text-red-400 hover:text-red-600 mt-2">
+                       Bağlantıyı Kes
+                     </button>
+                   </div>
+                 ) : (
+                   <div className="space-y-3">
+                     <p className="text-xs text-indigo-700 leading-tight">
+                       Verilerinizi tüm cihazlarınızda (PC, Telefon) eşitlemek için Gizli Cüzdan'ı etkinleştirin.
+                     </p>
+                     
+                     {showCloudSetup === 'NONE' ? (
+                       <div className="grid grid-cols-2 gap-2">
+                         <button onClick={() => setShowCloudSetup('CREATE')} className="py-2 px-1 bg-white border border-indigo-200 rounded-lg text-xs font-semibold text-indigo-600 hover:bg-indigo-50">
+                           Yeni Cüzdan
+                         </button>
+                         <button onClick={() => setShowCloudSetup('CONNECT')} className="py-2 px-1 bg-indigo-600 rounded-lg text-xs font-semibold text-white hover:bg-indigo-700">
+                           Cüzdana Bağlan
+                         </button>
+                       </div>
+                     ) : (
+                       <div className="bg-white p-3 rounded-lg space-y-3 animate-in fade-in slide-in-from-bottom-2">
+                         <div className="flex justify-between items-center">
+                           <span className="text-xs font-bold text-gray-700">
+                             {showCloudSetup === 'CREATE' ? 'Yeni Oluştur' : 'Mevcuta Bağlan'}
+                           </span>
+                           <button onClick={() => setShowCloudSetup('NONE')} className="text-gray-400"><X className="w-3 h-3"/></button>
+                         </div>
+                         
+                         <div>
+                           <label className="text-[10px] font-bold text-gray-500 uppercase">1. Erişim Anahtarı (API Key)</label>
+                           <input 
+                             type="password" 
+                             placeholder="JSONBin.io Master Key"
+                             value={cloudInputApiKey}
+                             onChange={(e) => setCloudInputApiKey(e.target.value)}
+                             className="w-full text-xs p-2 border rounded mt-1"
+                           />
+                           <a href="https://jsonbin.io/app/api-keys" target="_blank" rel="noreferrer" className="text-[9px] text-blue-500 underline mt-1 block">
+                             Anahtarı buradan al (Ücretsiz)
+                           </a>
+                         </div>
+
+                         {showCloudSetup === 'CONNECT' && (
+                           <div>
+                             <label className="text-[10px] font-bold text-gray-500 uppercase">2. Cüzdan Kimliği (Bin ID)</label>
+                             <input 
+                               type="text" 
+                               placeholder="Diğer cihazdaki ID"
+                               value={cloudInputBinId}
+                               onChange={(e) => setCloudInputBinId(e.target.value)}
+                               className="w-full text-xs p-2 border rounded mt-1"
+                             />
+                           </div>
+                         )}
+
+                         <button 
+                           onClick={() => handleCloudSetup(showCloudSetup)}
+                           disabled={isSyncing}
+                           className="w-full py-2 bg-indigo-600 text-white rounded text-xs font-bold"
+                         >
+                           {isSyncing ? 'İşleniyor...' : (showCloudSetup === 'CREATE' ? 'Oluştur ve Yükle' : 'Bağlan ve İndir')}
+                         </button>
+                         <p className="text-[10px] text-gray-400 italic mt-2 text-center">* Kurulum tek seferliktir. Uygulama bilgileri hafızada tutar.</p>
+                       </div>
+                     )}
+                   </div>
+                 )}
+               </div>
+
                {/* Security Section */}
                <div className="bg-gray-50 rounded-xl p-4">
                  <h4 className="text-sm font-bold text-gray-500 uppercase mb-3 flex items-center gap-1">
@@ -1042,7 +1343,7 @@ const App: React.FC = () => {
             </div>
             
             <div className="mt-6 text-center text-xs text-gray-400">
-              v1.2 • Gemini AI Powered
+              v1.3 • Gemini AI • Cloud Sync
             </div>
           </div>
         </div>
