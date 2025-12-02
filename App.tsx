@@ -260,7 +260,10 @@ const App: React.FC = () => {
   // --- CLOUD LOGIC ---
 
   const handleCloudSetup = async (mode: 'CREATE' | 'CONNECT') => {
-    if (!cloudInputApiKey) {
+    const cleanApiKey = cloudInputApiKey.trim();
+    const cleanBinId = cloudInputBinId.trim();
+
+    if (!cleanApiKey) {
       alert("Lütfen bir Erişim Anahtarı (API Key) girin.");
       return;
     }
@@ -269,35 +272,35 @@ const App: React.FC = () => {
 
     if (mode === 'CREATE') {
       // Create new bin with current local data
-      const binId = await createCloudBin(cloudInputApiKey, payments);
+      const binId = await createCloudBin(cleanApiKey, payments);
       if (binId) {
-        const newConfig = { apiKey: cloudInputApiKey, binId, lastSyncedAt: new Date().toISOString() };
+        const newConfig = { apiKey: cleanApiKey, binId, lastSyncedAt: new Date().toISOString() };
         setCloudConfig(newConfig);
         localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(newConfig));
-        alert("Gizli Cüzdan oluşturuldu! Bu cihazdaki veriler buluta yüklendi.");
+        alert("Gizli Cüzdan başarıyla oluşturuldu!\n\nID'niz oluşturuldu. Şimdi bu ID ve API Key'i diğer cihazlarınızda 'Cüzdana Bağlan' diyerek kullanabilirsiniz.");
         setShowCloudSetup('NONE');
       } else {
-        alert("Cüzdan oluşturulamadı. API Key'in geçerli olduğundan emin olun.");
+        alert("Cüzdan oluşturulamadı. API Key'in geçerli olduğundan ve 'Create' iznine sahip olduğundan emin olun.");
       }
     } else {
       // Connect to existing bin
-      if (!cloudInputBinId) {
+      if (!cleanBinId) {
         alert("Bağlanmak için Cüzdan Kimliği (ID) gereklidir.");
         setIsSyncing(false);
         return;
       }
       
-      const data = await fetchCloudData(cloudInputBinId, cloudInputApiKey);
+      const data = await fetchCloudData(cleanBinId, cleanApiKey);
       if (data) {
         ignoreNextCloudPush.current = true; // Don't push back what we just pulled
         setPayments(data); // Replace local with cloud
-        const newConfig = { apiKey: cloudInputApiKey, binId: cloudInputBinId, lastSyncedAt: new Date().toISOString() };
+        const newConfig = { apiKey: cleanApiKey, binId: cleanBinId, lastSyncedAt: new Date().toISOString() };
         setCloudConfig(newConfig);
         localStorage.setItem(CLOUD_CONFIG_KEY, JSON.stringify(newConfig));
         alert("Cüzdana başarıyla bağlanıldı! Veriler indirildi.");
         setShowCloudSetup('NONE');
       } else {
-        alert("Bağlantı başarısız. Kimlikleri kontrol edin.");
+        alert("Bağlantı başarısız. Kimlikleri veya yetkileri kontrol edin.");
       }
     }
     setIsSyncing(false);

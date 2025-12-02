@@ -15,7 +15,8 @@ export const fetchCloudData = async (binId: string, apiKey: string): Promise<Pay
     });
 
     if (!response.ok) {
-      throw new Error('Cloud fetch failed');
+      console.error(`Cloud Fetch Failed: ${response.status} ${response.statusText}`);
+      return null;
     }
 
     const result = await response.json();
@@ -38,6 +39,11 @@ export const updateCloudData = async (binId: string, apiKey: string, data: Payme
       body: JSON.stringify(data)
     });
 
+    if (!response.ok) {
+        console.error(`Cloud Update Failed: ${response.status} ${response.statusText}`);
+        return false;
+    }
+
     return response.ok;
   } catch (error) {
     console.error("Cloud Update Error:", error);
@@ -52,12 +58,15 @@ export const createCloudBin = async (apiKey: string, data: Payment[]): Promise<s
       headers: {
         'X-Master-Key': apiKey,
         'Content-Type': 'application/json',
-        'X-Bin-Name': 'OdemeTakipcisi_Data'
+        'X-Bin-Name': 'OdemeTakipcisi_Data',
+        'X-Bin-Private': 'true' // Verilerin başkaları tarafından listelenmesini engeller
       },
       body: JSON.stringify(data)
     });
 
     if (!response.ok) {
+      const errText = await response.text();
+      console.error(`Bin Creation Failed: ${response.status} - ${errText}`);
       throw new Error('Bin creation failed');
     }
 
