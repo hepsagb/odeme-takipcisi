@@ -131,7 +131,8 @@ const App: React.FC = () => {
       handleCloudPull(config); 
     }
 
-    requestNotificationPermission();
+    // REMOVED: Automatic notification request on load (caused error)
+    // requestNotificationPermission();
 
     // 3. Check PIN
     const savedPin = localStorage.getItem(PIN_KEY);
@@ -272,6 +273,7 @@ const App: React.FC = () => {
 
     if (mode === 'CREATE') {
       // Create new bin with current local data
+      // Not: Artık serviste veri sarmalanarak gönderiliyor, boş hatası çıkmayacak.
       const binId = await createCloudBin(cleanApiKey, payments);
       if (binId) {
         const newConfig = { apiKey: cleanApiKey, binId, lastSyncedAt: new Date().toISOString() };

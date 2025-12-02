@@ -48,24 +48,5 @@
   <body>
     <div id="root"></div>
     <script type="module" src="/index.tsx"></script>
-    <script>
-      // Basit Service Worker Kaydı (PWA Kurulumu İçin Gereklidir)
-      if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          // Sanal bir service worker oluşturuyoruz
-          const swCode = `
-            self.addEventListener('install', (e) => e.waitUntil(self.skipWaiting()));
-            self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
-            self.addEventListener('fetch', (e) => {});
-          `;
-          const blob = new Blob([swCode], { type: 'application/javascript' });
-          const url = URL.createObjectURL(blob);
-          
-          navigator.serviceWorker.register(url)
-            .then(() => console.log('PWA Hazır'))
-            .catch((err) => console.log('PWA Hatası:', err));
-        });
-      }
-    </script>
   </body>
 </html>
