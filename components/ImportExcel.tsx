@@ -1,16 +1,16 @@
-
 import React, { useState } from 'react';
 import * as XLSX from 'xlsx';
-import { Upload, FileSpreadsheet, AlertCircle, Download } from 'lucide-react';
+import { Upload, FileSpreadsheet, AlertCircle, Download, ListPlus, RefreshCcw, ArrowLeft } from 'lucide-react';
 import { ExcelRow, Payment, PaymentCategory, PaymentPeriod } from '../types';
 
 interface ImportExcelProps {
-  onImport: (data: Payment[]) => void;
+  onImport: (data: Payment[], mode: 'APPEND' | 'REPLACE') => void;
   onCancel: () => void;
 }
 
 export const ImportExcel: React.FC<ImportExcelProps> = ({ onImport, onCancel }) => {
   const [error, setError] = useState<string | null>(null);
+  const [previewData, setPreviewData] = useState<Payment[] | null>(null);
 
   const determineCategory = (type: string): PaymentCategory => {
     const t = type.toLowerCase();
@@ -236,12 +236,15 @@ export const ImportExcel: React.FC<ImportExcelProps> = ({ onImport, onCancel }) 
 
         if (formattedPayments.length === 0) {
           setError("Excel dosyasında uygun formatta veri bulunamadı.");
+          setPreviewData(null);
         } else {
-          onImport(formattedPayments);
+          setError(null);
+          setPreviewData(formattedPayments);
         }
       } catch (err) {
         console.error(err);
         setError("Dosya okunamadı. Lütfen geçerli bir .xlsx dosyası yükleyin.");
+        setPreviewData(null);
       }
     };
     reader.readAsBinaryString(file);
@@ -258,41 +261,85 @@ export const ImportExcel: React.FC<ImportExcelProps> = ({ onImport, onCancel }) 
           <button onClick={onCancel} className="text-gray-500 hover:text-gray-700">✕</button>
         </div>
 
-        <div className="bg-blue-50 p-4 rounded-lg mb-6 border border-blue-100 text-sm">
-          <div className="flex justify-between items-center mb-2">
-            <p className="font-semibold text-blue-800">Excel Sütun Başlıkları:</p>
-            <button 
-              onClick={downloadTemplate}
-              className="text-xs bg-white text-blue-600 border border-blue-200 px-2 py-1 rounded flex items-center gap-1 hover:bg-blue-50"
-            >
-              <Download className="w-3 h-3" /> Yeni Taslağı İndir
-            </button>
-          </div>
-          <ul className="list-disc pl-4 space-y-1 text-blue-700 text-xs">
-            <li><span className="font-bold">Ad, Ödeme Türü, Miktar, Tarih</span> (Temel)</li>
-            <li><span className="font-bold">Periyot</span> (Örn: Haftalık, Aylık)</li>
-            <li><span className="font-bold">Etiket</span> (Örn: Tatil, Market)</li>
-            <li><span className="font-bold">Taahhüt Bitiş Tarihi</span> (Faturalar için)</li>
-            <li><span className="font-bold">Otomatik Ödeme</span> (Evet/Hayır)</li>
-          </ul>
-        </div>
+        {!previewData ? (
+          <>
+            <div className="bg-blue-50 p-4 rounded-lg mb-6 border border-blue-100 text-sm">
+              <div className="flex justify-between items-center mb-2">
+                <p className="font-semibold text-blue-800">Excel Sütun Başlıkları:</p>
+                <button 
+                  onClick={downloadTemplate}
+                  className="text-xs bg-white text-blue-600 border border-blue-200 px-2 py-1 rounded flex items-center gap-1 hover:bg-blue-50"
+                >
+                  <Download className="w-3 h-3" /> Yeni Taslağı İndir
+                </button>
+              </div>
+              <ul className="list-disc pl-4 space-y-1 text-blue-700 text-xs">
+                <li><span className="font-bold">Ad, Ödeme Türü, Miktar, Tarih</span> (Temel)</li>
+                <li><span className="font-bold">Periyot</span> (Örn: Haftalık, Aylık)</li>
+                <li><span className="font-bold">Etiket</span> (Örn: Tatil, Market)</li>
+                <li><span className="font-bold">Taahhüt Bitiş Tarihi</span> (Faturalar için)</li>
+                <li><span className="font-bold">Otomatik Ödeme</span> (Evet/Hayır)</li>
+              </ul>
+            </div>
 
-        <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 flex flex-col items-center justify-center text-center hover:bg-gray-50 transition-colors relative">
-          <Upload className="w-10 h-10 text-gray-400 mb-2" />
-          <span className="text-gray-600 font-medium">Dosya Seçin</span>
-          <span className="text-xs text-gray-400 mt-1">.xlsx formatında</span>
-          <input 
-            type="file" 
-            accept=".xlsx, .xls"
-            onChange={handleFileUpload}
-            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-          />
-        </div>
+            <div className="border-2 border-dashed border-gray-300 rounded-lg p-8 flex flex-col items-center justify-center text-center hover:bg-gray-50 transition-colors relative">
+              <Upload className="w-10 h-10 text-gray-400 mb-2" />
+              <span className="text-gray-600 font-medium">Dosya Seçin</span>
+              <span className="text-xs text-gray-400 mt-1">.xlsx formatında</span>
+              <input 
+                type="file" 
+                accept=".xlsx, .xls"
+                onChange={handleFileUpload}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              />
+            </div>
 
-        {error && (
-          <div className="mt-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg flex items-start gap-2">
-            <AlertCircle className="w-5 h-5 flex-shrink-0" />
-            <span>{error}</span>
+            {error && (
+              <div className="mt-4 p-3 bg-red-50 text-red-700 text-sm rounded-lg flex items-start gap-2">
+                <AlertCircle className="w-5 h-5 flex-shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="space-y-4 animate-in fade-in">
+             <div className="bg-green-50 border border-green-200 p-4 rounded-lg text-center">
+                <p className="text-green-800 font-bold text-lg">{previewData.length} Kayıt Bulundu</p>
+                <p className="text-green-600 text-xs">Veriler başarıyla okundu. Nasıl devam etmek istersiniz?</p>
+             </div>
+
+             <button 
+               onClick={() => onImport(previewData, 'APPEND')}
+               className="w-full flex items-center justify-between p-4 bg-white border border-blue-200 rounded-xl shadow-sm hover:bg-blue-50 transition group"
+             >
+                <div className="flex items-center gap-3">
+                   <div className="bg-blue-100 p-2 rounded-lg text-blue-600 group-hover:bg-blue-200"><ListPlus className="w-5 h-5" /></div>
+                   <div className="text-left">
+                      <p className="font-bold text-gray-800 text-sm">Mevcutların Altına Ekle</p>
+                      <p className="text-xs text-gray-500">Eski veriler kalır, yeniler eklenir.</p>
+                   </div>
+                </div>
+             </button>
+
+             <button 
+               onClick={() => onImport(previewData, 'REPLACE')}
+               className="w-full flex items-center justify-between p-4 bg-white border border-red-200 rounded-xl shadow-sm hover:bg-red-50 transition group"
+             >
+                <div className="flex items-center gap-3">
+                   <div className="bg-red-100 p-2 rounded-lg text-red-600 group-hover:bg-red-200"><RefreshCcw className="w-5 h-5" /></div>
+                   <div className="text-left">
+                      <p className="font-bold text-gray-800 text-sm">Tümünü Sil ve Yükle</p>
+                      <p className="text-xs text-gray-500">Mevcut veriler silinir, sadece bunlar kalır.</p>
+                   </div>
+                </div>
+             </button>
+
+             <button 
+               onClick={() => { setPreviewData(null); setError(null); }}
+               className="w-full py-2 text-gray-500 text-sm hover:text-gray-700 flex items-center justify-center gap-1"
+             >
+               <ArrowLeft className="w-4 h-4" /> Geri Dön (Farklı Dosya Seç)
+             </button>
           </div>
         )}
       </div>

@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useRef } from 'react';
 import { 
   Plus, 
@@ -386,8 +385,17 @@ const App: React.FC = () => {
     }
   };
 
-  const handleImport = (importedPayments: Payment[]) => {
-    setPayments(prev => [...prev, ...importedPayments]);
+  const handleImport = (importedPayments: Payment[], mode: 'APPEND' | 'REPLACE') => {
+    if (mode === 'REPLACE') {
+       if (window.confirm("DİKKAT: Mevcut tüm verileriniz silinecek ve yerine Excel'deki veriler geçecek. Bu işlem geri alınamaz. Onaylıyor musunuz?")) {
+          setPayments(importedPayments);
+       } else {
+          return; // User cancelled
+       }
+    } else {
+       // APPEND
+       setPayments(prev => [...prev, ...importedPayments]);
+    }
     setShowImportModal(false);
     setShowSettings(false); // Close settings if opened from there
   };
