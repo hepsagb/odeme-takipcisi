@@ -1,5 +1,5 @@
 {
-  "name": "Ödeme Takipçisi",
+  "name": "Ödemelerim",
   "description": "Kişisel finans ve ödeme takip uygulaması. Excel'den veri yükleme ve bildirim özellikleri içerir.",
   "requestFramePermissions": []
 }

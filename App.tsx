@@ -838,7 +838,7 @@ const App: React.FC = () => {
           <div className="flex justify-between items-start mb-4">
             <div>
               <h1 className="text-2xl font-bold flex items-center gap-2">
-                Ödeme Planlayıcı
+                Ödemelerim
                 {cloudConfig && <CloudLightning className="w-4 h-4 text-green-300 animate-pulse" />}
               </h1>
               <p className="text-blue-100 text-sm opacity-90">{currentTime.toLocaleDateString('tr-TR', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
