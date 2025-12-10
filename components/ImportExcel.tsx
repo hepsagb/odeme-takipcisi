@@ -79,10 +79,11 @@ export const ImportExcel: React.FC<ImportExcelProps> = ({ onImport, onCancel }) 
       {
         'Ad': 'Bonus Kart',
         'Ödeme Türü': 'Kredi Kartı',
-        'Miktar': 12000,
+        'Miktar': 0,
         'Tarih': '30.10.2023',
-        'Asgari Tutar': 2400,
-        'Etiket': 'Genel'
+        'Bitiş Tarihi': '30.10.2024',
+        'Asgari Tutar': 0,
+        'Etiket': 'Gelecek Ekstre'
       },
        {
         'Ad': 'İnternet',
@@ -98,7 +99,7 @@ export const ImportExcel: React.FC<ImportExcelProps> = ({ onImport, onCancel }) 
     const ws = XLSX.utils.json_to_sheet(sampleData, { header: headers });
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Taslak");
-    XLSX.writeFile(wb, "odeme_takip_taslak_v3.xlsx");
+    XLSX.writeFile(wb, "odeme_takip_taslak_v5.xlsx");
   };
 
   const parseDate = (excelDate: string | number | undefined): string | undefined => {
@@ -162,7 +163,8 @@ export const ImportExcel: React.FC<ImportExcelProps> = ({ onImport, onCancel }) 
         const formattedPayments: Payment[] = [];
         
         data.forEach((row: any, index: number) => {
-          if (!row['Ad'] || !row['Miktar']) return;
+          // Changed: We now allow empty amount (defaults to 0) for Credit Cards etc.
+          if (!row['Ad']) return;
 
           let startDateStr = parseDate(row['Tarih']);
           if (!startDateStr) startDateStr = new Date().toISOString().split('T')[0];
@@ -172,43 +174,50 @@ export const ImportExcel: React.FC<ImportExcelProps> = ({ onImport, onCancel }) 
           
           const pType = row['Ödeme Türü'] || 'Fatura';
           const category = determineCategory(pType);
+          const amount = row['Miktar'] ? Number(row['Miktar']) : 0;
 
           // Restore logic: Check if it's a backup file with status
           const isPaidImport = row['Durum'] === 'Ödendi';
           const paidAmountImport = row['Ödenen Tutar'] ? Number(row['Ödenen Tutar']) : 0;
           
-          // --- LOAN LOGIC: Generate all installments if End Date exists ---
+          // --- RECURRING LOGIC: Generate all installments/months if End Date exists ---
+          // Hem Kredi (LOAN) hem de Kredi Kartı (CARD) için bitiş tarihi varsa çoğalt
           const isBackup = row['Durum'] !== undefined;
+          const isRecurringImport = (category === 'LOAN' || category === 'CARD') && endDateStr && !isBackup;
 
-          if (category === 'LOAN' && endDateStr && !isBackup) {
+          if (isRecurringImport) {
             const start = new Date(startDateStr);
-            const end = new Date(endDateStr);
+            const end = new Date(endDateStr!);
             
             // Loop from start date to end date
             let current = new Date(start);
-            let installmentCount = 0;
+            let count = 0;
 
             while (current <= end) {
               formattedPayments.push({
-                id: `excel-loan-${Date.now()}-${index}-${installmentCount}`,
+                id: `excel-auto-${Date.now()}-${index}-${count}`,
                 name: row['Ad'],
                 paymentType: pType,
                 category: category,
-                amount: Number(row['Miktar']),
+                amount: amount,
                 paidAmount: 0,
-                minimumPaymentAmount: undefined,
+                minimumPaymentAmount: row['Asgari Tutar'] ? Number(row['Asgari Tutar']) : undefined,
                 date: current.toISOString().split('T')[0],
                 isPaid: false,
                 endDate: endDateStr,
                 period: 'MONTHLY',
-                customTag: row['Etiket']
+                customTag: row['Etiket'],
+                // Eğer kart ise ve otomatik ödeme varsa bunları taşıma, genellikle fatura özelliğidir ama zararı yok
+                autoPayment: parseAutoPayment(row['Otomatik Ödeme']),
+                autoPaymentBank: row['Otomatik Ödeme Bankası']
               });
 
               // Add 1 month
               current.setMonth(current.getMonth() + 1);
-              installmentCount++;
+              count++;
               
-              if (installmentCount > 120) break;
+              // Safety break (10 years)
+              if (count > 120) break;
             }
           } else {
             // --- STANDARD LOGIC / BACKUP RESTORE ---
@@ -217,7 +226,7 @@ export const ImportExcel: React.FC<ImportExcelProps> = ({ onImport, onCancel }) 
               name: row['Ad'],
               paymentType: pType,
               category: category,
-              amount: Number(row['Miktar']),
+              amount: amount,
               paidAmount: paidAmountImport,
               minimumPaymentAmount: row['Asgari Tutar'] ? Number(row['Asgari Tutar']) : undefined,
               date: startDateStr,
@@ -265,7 +274,7 @@ export const ImportExcel: React.FC<ImportExcelProps> = ({ onImport, onCancel }) 
           <>
             <div className="bg-blue-50 p-4 rounded-lg mb-6 border border-blue-100 text-sm">
               <div className="flex justify-between items-center mb-2">
-                <p className="font-semibold text-blue-800">Excel Sütun Başlıkları:</p>
+                <p className="font-semibold text-blue-800">Excel İpuçları:</p>
                 <button 
                   onClick={downloadTemplate}
                   className="text-xs bg-white text-blue-600 border border-blue-200 px-2 py-1 rounded flex items-center gap-1 hover:bg-blue-50"
@@ -274,11 +283,9 @@ export const ImportExcel: React.FC<ImportExcelProps> = ({ onImport, onCancel }) 
                 </button>
               </div>
               <ul className="list-disc pl-4 space-y-1 text-blue-700 text-xs">
-                <li><span className="font-bold">Ad, Ödeme Türü, Miktar, Tarih</span> (Temel)</li>
-                <li><span className="font-bold">Periyot</span> (Örn: Haftalık, Aylık)</li>
-                <li><span className="font-bold">Etiket</span> (Örn: Tatil, Market)</li>
-                <li><span className="font-bold">Taahhüt Bitiş Tarihi</span> (Faturalar için)</li>
-                <li><span className="font-bold">Otomatik Ödeme</span> (Evet/Hayır)</li>
+                <li><span className="font-bold">Ad ve Tarih</span> zorunludur.</li>
+                <li><span className="font-bold">Tutar:</span> Ekstresi belli olmayan kartlar için boş bırakabilirsiniz (0 olarak kaydedilir).</li>
+                <li><span className="font-bold">Kredi Kartları için:</span> Eğer 'Bitiş Tarihi' girerseniz (Örn: 1 yıl sonrası), sistem o tarihe kadar her ay için kart kaydını otomatik oluşturur.</li>
               </ul>
             </div>
 
@@ -305,7 +312,7 @@ export const ImportExcel: React.FC<ImportExcelProps> = ({ onImport, onCancel }) 
           <div className="space-y-4 animate-in fade-in">
              <div className="bg-green-50 border border-green-200 p-4 rounded-lg text-center">
                 <p className="text-green-800 font-bold text-lg">{previewData.length} Kayıt Bulundu</p>
-                <p className="text-green-600 text-xs">Veriler başarıyla okundu. Nasıl devam etmek istersiniz?</p>
+                <p className="text-green-600 text-xs">Veriler okundu. Kredi/Kart döngüleri (varsa) oluşturuldu.</p>
              </div>
 
              <button 

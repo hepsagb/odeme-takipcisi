@@ -38,7 +38,11 @@ import {
   Cloud,
   CloudLightning,
   Link as LinkIcon,
-  Copy
+  Copy,
+  CalendarRange,
+  CalendarDays,
+  ToggleLeft,
+  ToggleRight
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { Payment, PaymentCategory, PAYMENT_TYPES, PaymentPeriod, AiAnalysisData, CloudConfig } from './types';
@@ -91,6 +95,13 @@ const App: React.FC = () => {
   // Navigation and Logic
   const [selectedDate, setSelectedDate] = useState(new Date());
   const [activeTab, setActiveTab] = useState<PaymentCategory>('LOAN');
+  
+  // Filter Logic (New)
+  const [dateFilterMode, setDateFilterMode] = useState<'MONTH' | 'RANGE'>('MONTH');
+  const [customDateRange, setCustomDateRange] = useState<{start: string, end: string}>({
+    start: new Date().toISOString().split('T')[0],
+    end: new Date(new Date().setMonth(new Date().getMonth() + 1)).toISOString().split('T')[0]
+  });
   
   // Payment Modal State
   const [paymentModal, setPaymentModal] = useState<{ isOpen: boolean; paymentId: string | null }>({
@@ -272,7 +283,6 @@ const App: React.FC = () => {
 
     if (mode === 'CREATE') {
       // Create new bin with current local data
-      // Not: Artık serviste veri sarmalanarak gönderiliyor, boş hatası çıkmayacak.
       const binId = await createCloudBin(cleanApiKey, payments);
       if (binId) {
         const newConfig = { apiKey: cleanApiKey, binId, lastSyncedAt: new Date().toISOString() };
@@ -437,24 +447,34 @@ const App: React.FC = () => {
     }
   };
 
+  const toggleAutoPayment = (id: string, currentStatus: boolean | undefined) => {
+    setPayments(prev => prev.map(p => 
+      p.id === id ? { ...p, autoPayment: !currentStatus } : p
+    ));
+  };
+
   // --- Logic Helpers ---
 
   const determineCategory = (type: string): PaymentCategory => {
-    if (type === 'Dijital') return 'DIGITAL';
-    if (type === 'Fatura') return 'BILL';
-    if (type === 'Kredi Kartı') return 'CARD';
-    return 'LOAN';
+    const t = type.toLowerCase();
+    if (t.includes('dijital')) return 'DIGITAL';
+    if (t.includes('fatura')) return 'BILL';
+    if (t.includes('kart')) return 'CARD';
+    if (t.includes('kredi')) return 'LOAN';
+    return 'BILL';
   };
 
   const validatePaymentEntry = (p: Partial<Payment>): string | null => {
-    if (!p.name || !p.amount || !p.date || !p.paymentType) {
-      return "Lütfen temel alanları (Ad, Tutar, Tarih, Tür) doldurun.";
+    // Changed: p.amount check removed to allow 0
+    if (!p.name || !p.date || !p.paymentType) {
+      return "Lütfen temel alanları (Ad, Tarih, Tür) doldurun.";
     }
     if (p.paymentType === 'Kredi' && !p.endDate) {
       return "Krediler için Bitiş Tarihi zorunludur.";
     }
+    // Changed: Allow 0 for minimum payment
     if (p.paymentType === 'Kredi Kartı' && (p.minimumPaymentAmount === undefined || p.minimumPaymentAmount === null)) {
-      return "Kredi kartları için Asgari Tutar zorunludur.";
+      return "Kredi kartları için Asgari Tutar zorunludur (0 girebilirsiniz).";
     }
     return null;
   };
@@ -473,17 +493,18 @@ const App: React.FC = () => {
 
     const category = determineCategory(p.paymentType || 'Fatura');
     const isPastEntry = entryModal.isPastPayment;
+    const finalAmount = p.amount !== undefined ? Number(p.amount) : 0;
     
     if (p.id) {
-      setPayments(prev => prev.map(item => item.id === p.id ? { ...item, ...p, category } as Payment : item));
+      setPayments(prev => prev.map(item => item.id === p.id ? { ...item, ...p, amount: finalAmount, category } as Payment : item));
     } else {
       const newPayment: Payment = {
         id: `manual-${Date.now()}`,
         name: p.name!,
         paymentType: p.paymentType!,
         category: category,
-        amount: Number(p.amount),
-        paidAmount: isPastEntry ? Number(p.amount) : 0,
+        amount: finalAmount,
+        paidAmount: isPastEntry ? finalAmount : 0,
         minimumPaymentAmount: p.minimumPaymentAmount ? Number(p.minimumPaymentAmount) : undefined,
         date: p.date!,
         isPaid: isPastEntry || false,
@@ -499,10 +520,47 @@ const App: React.FC = () => {
     setEntryModal({ isOpen: false, payment: null });
   };
 
+  const duplicatePayment = () => {
+    const p = entryModal.payment;
+    if (!p || !p.date) return;
+    
+    // Calculate Next Month Date
+    const currentD = new Date(p.date);
+    currentD.setMonth(currentD.getMonth() + 1);
+    const nextDateStr = currentD.toISOString().split('T')[0];
+
+    const newPayment: Payment = {
+        // @ts-ignore - ID will be generated
+        id: `copy-${Date.now()}`,
+        name: p.name || 'Kopya Ödeme',
+        paymentType: p.paymentType || 'Fatura',
+        category: determineCategory(p.paymentType || ''),
+        amount: Number(p.amount || 0),
+        paidAmount: 0,
+        minimumPaymentAmount: p.minimumPaymentAmount ? Number(p.minimumPaymentAmount) : undefined,
+        date: nextDateStr,
+        isPaid: false,
+        endDate: p.endDate,
+        period: p.period || 'MONTHLY',
+        customTag: p.customTag,
+        commitmentEndDate: p.commitmentEndDate,
+        autoPayment: p.autoPayment,
+        autoPaymentBank: p.autoPaymentBank
+    };
+
+    setPayments(prev => [...prev, newPayment]);
+    setEntryModal({ isOpen: false, payment: null });
+    
+    // Feedback
+    confetti({ particleCount: 30, spread: 50, origin: { y: 0.7 } });
+    alert(`"${p.name}" bir sonraki aya (${new Date(nextDateStr).toLocaleDateString('tr-TR', {month:'long'})}) kopyalandı!`);
+  };
+
   const openPaymentModal = (id: string) => {
     const payment = payments.find(p => p.id === id);
     if (!payment) return;
-    setPayAmountInput(payment.amount.toString());
+    // If amount is 0 (unknown), input starts blank or 0
+    setPayAmountInput(payment.amount > 0 ? payment.amount.toString() : '');
     setPaymentModal({ isOpen: true, paymentId: id });
   };
 
@@ -519,9 +577,12 @@ const App: React.FC = () => {
       const currentPayment = prev.find(p => p.id === paymentModal.paymentId);
       if (!currentPayment) return prev;
 
+      // If original amount was 0, update it to the paid value as well so stats look correct
+      const finalOriginalAmount = currentPayment.amount === 0 ? paidVal : currentPayment.amount;
+
       const updatedPayments = prev.map(p => 
         p.id === paymentModal.paymentId 
-          ? { ...p, isPaid: true, paidAmount: paidVal } 
+          ? { ...p, isPaid: true, paidAmount: paidVal, amount: finalOriginalAmount } 
           : p
       );
 
@@ -555,13 +616,19 @@ const App: React.FC = () => {
         }
 
         if (shouldGenerate) {
+          // Generated future payments default to 0 amount if current was also 0/unknown
+          // OR keep the same amount if it was known.
+          // Strategy: If user just paid an "Unknown" bill (updated to real value), 
+          // do we copy the real value or reset to 0? Usually bills vary, so 0 (Unknown) might be safer for Cards/Bills.
+          // BUT for simplicity, let's copy the base amount. If base was 0, it copies 0.
+          
           const newPayment: Payment = {
             ...currentPayment,
             id: `auto-${Date.now()}`,
             date: nextDateStr,
             isPaid: false,
             paidAmount: 0,
-            amount: currentPayment.amount,
+            amount: currentPayment.amount === 0 ? 0 : currentPayment.amount, // Keep it 0 if it was originally 0
             period: currentPayment.period,
             customTag: currentPayment.customTag,
             autoPayment: currentPayment.autoPayment,
@@ -593,17 +660,30 @@ const App: React.FC = () => {
     setSelectedDate(newDate);
   };
 
-  const getAllPaymentsForMonth = () => {
-    const year = selectedDate.getFullYear();
-    const month = selectedDate.getMonth();
-    return payments.filter(p => {
-      const pDate = new Date(p.date);
-      return pDate.getFullYear() === year && pDate.getMonth() === month;
-    });
+  const getPaymentsForCurrentView = () => {
+    if (dateFilterMode === 'MONTH') {
+      const year = selectedDate.getFullYear();
+      const month = selectedDate.getMonth();
+      return payments.filter(p => {
+        const pDate = new Date(p.date);
+        return pDate.getFullYear() === year && pDate.getMonth() === month;
+      });
+    } else {
+      // RANGE Mode
+      const start = new Date(customDateRange.start);
+      start.setHours(0,0,0,0);
+      const end = new Date(customDateRange.end);
+      end.setHours(23,59,59,999);
+      
+      return payments.filter(p => {
+        const pDate = new Date(p.date);
+        return pDate >= start && pDate <= end;
+      });
+    }
   };
 
   const getTabPayments = () => {
-    return getAllPaymentsForMonth()
+    return getPaymentsForCurrentView()
       .filter(p => p.category === activeTab)
       .sort((a, b) => {
         return getAdjustedDate(a.date).getTime() - getAdjustedDate(b.date).getTime();
@@ -622,11 +702,11 @@ const App: React.FC = () => {
   };
 
   // Data for View
-  const allMonthPayments = getAllPaymentsForMonth();
+  const displayedPayments = getPaymentsForCurrentView();
   const filteredList = getTabPayments();
   const tabTotalAmount = filteredList.reduce((sum, p) => sum + p.amount, 0);
   const tabPaidAmount = filteredList.reduce((sum, p) => sum + (p.paidAmount || 0), 0);
-  const globalTotalAmount = allMonthPayments.reduce((sum, p) => sum + p.amount, 0);
+  const globalTotalAmount = displayedPayments.reduce((sum, p) => sum + p.amount, 0);
   const monthName = selectedDate.toLocaleDateString('tr-TR', { month: 'long', year: 'numeric' });
 
   // --- Dashboard Stats ---
@@ -652,12 +732,12 @@ const App: React.FC = () => {
     }
 
     const breakdown = { LOAN: 0, CARD: 0, DIGITAL: 0, BILL: 0 };
-    allMonthPayments.forEach(p => {
+    displayedPayments.forEach(p => {
       breakdown[p.category] += p.amount;
     });
 
     const tagBreakdown: Record<string, number> = {};
-    allMonthPayments.forEach(p => {
+    displayedPayments.forEach(p => {
       if (p.customTag) {
         tagBreakdown[p.customTag] = (tagBreakdown[p.customTag] || 0) + p.amount;
       }
@@ -799,7 +879,7 @@ const App: React.FC = () => {
             </div>
           </div>
 
-          {/* View Switcher */}
+          {/* View Switcher (List vs Dashboard) */}
           <div className="flex bg-blue-800/50 p-1 rounded-lg mb-4">
             <button 
               onClick={() => setViewMode('LIST')}
@@ -817,11 +897,48 @@ const App: React.FC = () => {
 
           {viewMode === 'LIST' && (
             <>
-              {/* Month Navigator */}
-              <div className="flex items-center justify-between bg-blue-700/50 rounded-lg p-2 mb-4">
-                <button onClick={() => changeMonth(-1)} className="p-1 hover:bg-blue-600 rounded"><ChevronLeft className="w-5 h-5" /></button>
-                <span className="font-semibold">{monthName}</span>
-                <button onClick={() => changeMonth(1)} className="p-1 hover:bg-blue-600 rounded"><ChevronRight className="w-5 h-5" /></button>
+              {/* FILTER BAR: Month Navigator OR Range Picker */}
+              <div className="bg-blue-700/50 rounded-lg p-2 mb-4 flex flex-col gap-2">
+                 
+                 {/* Mode Toggle */}
+                 <div className="flex items-center justify-center gap-3 mb-1">
+                    <button 
+                      onClick={() => setDateFilterMode('MONTH')} 
+                      className={`text-[10px] font-bold px-3 py-1 rounded-full flex items-center gap-1 transition ${dateFilterMode === 'MONTH' ? 'bg-white text-blue-700' : 'text-blue-200 hover:bg-blue-600/50'}`}
+                    >
+                      <CalendarDays className="w-3 h-3"/> Aylık Görünüm
+                    </button>
+                    <button 
+                      onClick={() => setDateFilterMode('RANGE')} 
+                      className={`text-[10px] font-bold px-3 py-1 rounded-full flex items-center gap-1 transition ${dateFilterMode === 'RANGE' ? 'bg-white text-blue-700' : 'text-blue-200 hover:bg-blue-600/50'}`}
+                    >
+                      <CalendarRange className="w-3 h-3"/> Tarih Aralığı
+                    </button>
+                 </div>
+
+                 {dateFilterMode === 'MONTH' ? (
+                   <div className="flex items-center justify-between">
+                      <button onClick={() => changeMonth(-1)} className="p-1 hover:bg-blue-600 rounded text-white"><ChevronLeft className="w-5 h-5" /></button>
+                      <span className="font-semibold text-white">{monthName}</span>
+                      <button onClick={() => changeMonth(1)} className="p-1 hover:bg-blue-600 rounded text-white"><ChevronRight className="w-5 h-5" /></button>
+                   </div>
+                 ) : (
+                   <div className="flex items-center gap-2 bg-blue-800/30 p-1.5 rounded-lg">
+                      <input 
+                        type="date" 
+                        value={customDateRange.start}
+                        onChange={(e) => setCustomDateRange(prev => ({ ...prev, start: e.target.value }))}
+                        className="flex-1 bg-white/10 border border-blue-400/30 rounded px-2 py-1 text-xs text-white outline-none focus:border-white"
+                      />
+                      <span className="text-white text-xs">-</span>
+                      <input 
+                        type="date" 
+                        value={customDateRange.end}
+                        onChange={(e) => setCustomDateRange(prev => ({ ...prev, end: e.target.value }))}
+                        className="flex-1 bg-white/10 border border-blue-400/30 rounded px-2 py-1 text-xs text-white outline-none focus:border-white"
+                      />
+                   </div>
+                 )}
               </div>
 
               {/* Summary Cards */}
@@ -967,7 +1084,7 @@ const App: React.FC = () => {
             {filteredList.length === 0 ? (
               <div className="text-center text-gray-400 mt-10">
                 <CalendarIcon className="w-12 h-12 mx-auto mb-2 opacity-30" />
-                <p>Bu ay için bu kategoride kayıt bulunamadı.</p>
+                <p>Bu aralık için bu kategoride kayıt bulunamadı.</p>
               </div>
             ) : (
               filteredList.map((payment) => {
@@ -981,6 +1098,7 @@ const App: React.FC = () => {
 
                 const isOverdue = !payment.isPaid && adjustedDateMidnight < todayMidnight;
                 const isToday = adjustedDateMidnight.getTime() === todayMidnight.getTime();
+                const isAmountUnknown = payment.amount === 0;
 
                 return (
                   <div 
@@ -1068,9 +1186,16 @@ const App: React.FC = () => {
 
                       <div className="text-right">
                         <div className="flex items-center justify-end gap-2">
-                          <p className={`font-bold ${payment.isPaid ? 'text-gray-400' : 'text-gray-900'}`}>
-                            {payment.amount.toLocaleString('tr-TR')} ₺
-                          </p>
+                          {isAmountUnknown && !payment.isPaid ? (
+                            <span className="text-[10px] font-bold text-orange-600 bg-orange-50 px-2 py-1 rounded border border-orange-100">
+                              Tutar Bekleniyor
+                            </span>
+                          ) : (
+                             <p className={`font-bold ${payment.isPaid ? 'text-gray-400' : 'text-gray-900'}`}>
+                                {payment.amount.toLocaleString('tr-TR')} ₺
+                             </p>
+                          )}
+
                           {!payment.isPaid && (
                             <button 
                               onClick={() => setEntryModal({ isOpen: true, payment })}
@@ -1217,6 +1342,40 @@ const App: React.FC = () => {
             </div>
 
             <div className="space-y-4">
+              
+              {/* Auto Payment Management Section */}
+              <div className="bg-green-50 rounded-xl p-4 border border-green-100">
+                 <h4 className="text-sm font-bold text-green-800 uppercase mb-3 flex items-center gap-1">
+                   <Landmark className="w-4 h-4" /> Otomatik Ödeme Yönetimi
+                 </h4>
+                 
+                 <div className="space-y-2 max-h-40 overflow-y-auto pr-1 custom-scrollbar">
+                    {payments.filter(p => p.autoPayment).length === 0 ? (
+                      <p className="text-xs text-gray-500 italic">Henüz otomatik ödeme talimatı tanımlanmış bir kayıt yok.</p>
+                    ) : (
+                      payments.filter(p => p.autoPayment).map(p => (
+                        <div key={p.id} className="bg-white p-2 rounded-lg border border-green-200 flex items-center justify-between">
+                          <div className="overflow-hidden">
+                            <p className="text-xs font-bold text-gray-800 truncate">{p.name}</p>
+                            <div className="flex items-center gap-1 text-[10px] text-gray-500">
+                              <span className="font-medium text-green-600">{p.autoPaymentBank || 'Banka Belirtilmedi'}</span>
+                              <span>•</span>
+                              <span>{p.amount.toLocaleString('tr-TR')} ₺</span>
+                            </div>
+                          </div>
+                          <button 
+                            onClick={() => toggleAutoPayment(p.id, p.autoPayment)}
+                            className="p-1.5 bg-green-100 text-green-700 rounded-lg hover:bg-green-200"
+                            title="Otomatik Ödemeyi Kapat"
+                          >
+                            <ToggleRight className="w-5 h-5" />
+                          </button>
+                        </div>
+                      ))
+                    )}
+                 </div>
+              </div>
+
                {/* Cloud Sync Section - "Hidden Membership" */}
                <div className="bg-indigo-50 rounded-xl p-4 border border-indigo-100">
                  <h4 className="text-sm font-bold text-indigo-800 uppercase mb-2 flex items-center gap-1">
@@ -1356,7 +1515,7 @@ const App: React.FC = () => {
             </div>
             
             <div className="mt-6 text-center text-xs text-gray-400">
-              v1.3 • Gemini AI • Cloud Sync
+              v1.4 • Gemini AI • Cloud Sync
             </div>
           </div>
         </div>
@@ -1395,7 +1554,7 @@ const App: React.FC = () => {
               <button onClick={() => setSummaryModal({ isOpen: false, type: null })} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
             </div>
             <div className="flex-1 overflow-y-auto no-scrollbar space-y-2">
-              {allMonthPayments
+              {displayedPayments
                 .filter(p => summaryModal.type === 'EXPECTED' ? true : p.paidAmount > 0) 
                 .sort((a,b) => getAdjustedDate(a.date).getTime() - getAdjustedDate(b.date).getTime())
                 .map(p => (
@@ -1600,6 +1759,15 @@ const App: React.FC = () => {
             </div>
 
             <div className="flex gap-3 mt-6">
+              {entryModal.payment.id && (
+                  <button 
+                    onClick={duplicatePayment} 
+                    className="flex items-center justify-center p-3 bg-purple-100 text-purple-600 rounded-xl hover:bg-purple-200 transition"
+                    title="Gelecek Aya Kopyala"
+                  >
+                    <Copy className="w-4 h-4" />
+                  </button>
+              )}
               <button onClick={() => setEntryModal({ isOpen: false, payment: null })} className="flex-1 py-3 text-gray-600 hover:bg-gray-100 rounded-xl">İptal</button>
               <button onClick={savePaymentEntry} className="flex-1 py-3 bg-indigo-600 text-white font-semibold rounded-xl hover:bg-indigo-700 flex justify-center items-center gap-2">
                 <Save className="w-4 h-4" /> Kaydet
