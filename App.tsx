@@ -686,6 +686,11 @@ const App: React.FC = () => {
     return getPaymentsForCurrentView()
       .filter(p => p.category === activeTab)
       .sort((a, b) => {
+        // 1. Sort by Status (Unpaid first / Paid Last)
+        if (a.isPaid !== b.isPaid) {
+            return a.isPaid ? 1 : -1;
+        }
+        // 2. Sort by Date
         return getAdjustedDate(a.date).getTime() - getAdjustedDate(b.date).getTime();
       });
   };
@@ -1753,6 +1758,19 @@ const App: React.FC = () => {
                       value={entryModal.payment.endDate || ''}
                       onChange={(e) => setEntryModal({ ...entryModal, payment: { ...entryModal.payment, endDate: e.target.value } })}
                       className="w-full border border-orange-200 rounded-lg p-2"
+                    />
+                 </div>
+              )}
+
+              {entryModal.payment.paymentType === 'Kredi Kartı' && (
+                 <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
+                    <label className="block text-xs font-bold text-blue-800 mb-1">Asgari Ödeme Tutarı</label>
+                    <input 
+                      type="number"
+                      value={entryModal.payment.minimumPaymentAmount !== undefined ? entryModal.payment.minimumPaymentAmount : ''}
+                      onChange={(e) => setEntryModal({ ...entryModal, payment: { ...entryModal.payment, minimumPaymentAmount: Number(e.target.value) } })}
+                      className="w-full border border-blue-200 rounded-lg p-2"
+                      placeholder="0 girebilirsiniz"
                     />
                  </div>
               )}
